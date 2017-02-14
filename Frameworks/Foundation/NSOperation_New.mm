@@ -14,55 +14,18 @@
 //
 //******************************************************************************
 
-#import <Foundation/NSOperationQueue.h>
+#import <Foundation/NSOperation.h>
 
-#import <Foundation/NSBlockOperation.h>
+@implementation NSOperation
 
-@implementation NSOperationQueue {
-    dispatch_queue_t _queue;
-}
+- (id)init {
+    if (self = [super init]) {
+        _dependencies.attach([NSMutableSet new]);
+        _ready = YES;
+        [self addObserver:self forKeyPath:@"isFinished" options:0 context:(void*)NSOperationContext];
+    }
 
-/**
- @Status Interoperable
-*/
-+ (NSOperationQueue*)currentQueue {
-}
-
-/**
- @Status Interoperable
-*/
-+ (NSOperationQueue*)mainQueue {
-}
-
-/**
- @Status Interoperable
-*/
-- (void)addOperation:(NSOperation*)op {
-}
-
-/**
- @Status Interoperable
-*/
-- (void)addOperations:(NSArray<NSOperation*>*)ops waitUntilFinished:(BOOL)wait {
-}
-
-/**
- @Status Interoperable
-*/
-- (void)addOperationWithBlock:(void (^)(void))block {
-    [self addOperation:[NSBlockOperation blockOperationWithBlock:block]];
-}
-
-/**
- @Status Interoperable
-*/
-- (void)cancelAllOperations {
-}
-
-/**
- @Status Interoperable
-*/
-- (void)waitUntilAllOperationsAreFinished {
+    return self;
 }
 
 @end

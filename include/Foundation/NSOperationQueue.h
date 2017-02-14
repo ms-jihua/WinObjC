@@ -19,11 +19,11 @@
 
 #import <dispatch/dispatch.h>
 #import <Foundation/FoundationExport.h>
+#import <Foundation/NSArray.h>
 #import <Foundation/NSObject.h>
 #import <Foundation/NSOperation.h>
 
 @class NSOperation;
-@class NSArray;
 @class NSString;
 
 enum { NSOperationQueueDefaultMaxConcurrentOperationCount = -1 };
@@ -35,9 +35,9 @@ FOUNDATION_EXPORT_CLASS
 + (NSOperationQueue*)currentQueue;
 + (NSOperationQueue*)mainQueue;
 - (void)addOperation:(NSOperation*)operation;
-- (void)addOperations:(NSArray*)ops waitUntilFinished:(BOOL)wait;
+- (void)addOperations:(NSArray<NSOperation*>*)ops waitUntilFinished:(BOOL)wait;
 - (void)addOperationWithBlock:(void (^)(void))block;
-@property (readonly, copy) NSArray* operations;
+@property (readonly, copy) NSArray<__kindof NSOperation*>* operations;
 @property (readonly) NSUInteger operationCount;
 - (void)cancelAllOperations;
 - (void)waitUntilAllOperationsAreFinished;

@@ -16,8 +16,6 @@
 
 #import <Foundation/NSOperationQueue.h>
 
-#import <Foundation/NSBlockOperation.h>
-
 @implementation NSOperationQueue {
     dispatch_queue_t _queue;
 }
@@ -50,19 +48,6 @@
  @Status Interoperable
 */
 - (void)addOperationWithBlock:(void (^)(void))block {
-    [self addOperation:[NSBlockOperation blockOperationWithBlock:block]];
-}
-
-/**
- @Status Interoperable
-*/
-- (void)cancelAllOperations {
-}
-
-/**
- @Status Interoperable
-*/
-- (void)waitUntilAllOperationsAreFinished {
 }
 
 @end
