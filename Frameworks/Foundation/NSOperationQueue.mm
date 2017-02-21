@@ -19,9 +19,12 @@
 #import <Foundation/NSBlockOperation.h>
 #import <Foundation/NSCondition.h>
 
+#import "NSOperationInternal.h"
 #import "Starboard.h"
 
-static long _QOSClassForNSQualityOfService(NSQualityOfService quality) {
+#import <queue>
+
+static inline long _QOSClassForNSQualityOfService(NSQualityOfService quality) {
     switch (quality) {
         case NSQualityOfServiceUserInteractive:
             return QOS_CLASS_USER_INTERACTIVE;
@@ -42,16 +45,23 @@ static long _QOSClassForNSQualityOfService(NSQualityOfService quality) {
 
 // Used for [NSOperationQueue currentQueue] - when an NSOperation is executed through an NSOperationQueue,
 // the current queue is stored in the thread dictionary using this key.
-static NSString* const _NSOperationQueueCurrentQueueKey = @"_NSOperationQueueCurrentQueueKey";
+static const NSString* const _NSOperationQueueCurrentQueueKey = @"_NSOperationQueueCurrentQueueKey";
+
+static const NSString* const _NSOperationQueue_OperationFinished = @"_NSOperationQueue_OperationFinished";
 
 @implementation NSOperationQueue {
 @private
     dispatch_queue_t _dispatchQueue;
 
-    NSQualityOfService _qualityOfService;
+    StrongId<NSMutableArray> _operations;
+    std::queue<NSOperation*> _unstartedOperations;
+    NSInteger _numExecutingOperations;
 
     // Signalled when operationCount reaches 0, for waitUntilAllOperationsAreFinished
+    // This condition only needs to be locked in waitUntilAllOperationsAreFinished, and in functions that _decrease_ the operation count
     StrongId<NSCondition> _operationCountCondition;
+
+    NSQualityOfService _qualityOfService;
 
     // This backs the user-set value of _underlyingQueue. _dispatchQueue is changed to target this if this is set.
     dispatch_queue_t _underlyingQueue;
@@ -61,24 +71,70 @@ static NSString* const _NSOperationQueueCurrentQueueKey = @"_NSOperationQueueCur
 void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
     dispatch_async(queue->_dispatchQueue, ^{
         // Get the currentQueue stored in the thread dictionary
-        NSDictionary* threadDictionary = [[NSThread currentThread] threadDictionary];
+        NSMutableDictionary* threadDictionary = [[NSThread currentThread] threadDictionary];
         StrongId<NSOperationQueue> currentQueue = [threadDictionary objectForKey:_NSOperationQueueCurrentQueueKey];
 
         // If this queue is not the current queue, store this queue while this operation is running, and restore it once it returns.
         bool queueChanged = [queue isEqual:currentQueue];
         if (queueChanged) {
-            [threadDictionary setValue:queue forKey:_NSOperationQueueCurrentQueueKey];
+            [threadDictionary setObject:queue forKey:_NSOperationQueueCurrentQueueKey];
         }
 
         wil::ScopeExit([threadDictionary, currentQueue, queueChanged]() {
             if (queueChanged) {
-                [threadDictionary setValue:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
+                [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
             }
         });
+
+        ++queue->_numExecutingOperations;
 
         // Run the actual operation
         [operation start];
     });
+}
+
+void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
+    dispatch_set_target_queue(queue->_dispatchQueue,
+                              dispatch_get_global_queue(_QOSClassForNSQualityOfService(queue->_qualityOfService), 0));
+}
+
+- (instancetype)init {
+    if (self = [super init]) {
+        _dispatchQueue = dispatch_queue_create("com.microsoft.winobjc.NSOperationQueue_dispatchQueue", DISPATCH_QUEUE_CONCURRENT);
+
+        _operations.attach([NSMutableArray new]);
+        _operationCountCondition.attach([NSCondition new]);
+
+        _qualityOfService = NSQualityOfServiceDefault;
+        _setTargetQueueUsingQualityOfService(self);
+    }
+    return self;
+}
+
+- (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context {
+    if ((context == _NSOperationQueue_OperationFinished) && ([object isKindOfClass:[NSOperation class]])) {
+        NSOperation* op = static_cast<NSOperation*>(object);
+        if ([op isFinished]) {
+            @synchronized(self) { // TODO: Is this the right synch
+                // Minor optimization: Search indexOfObject:op instead of directly using removeObject:
+                // removeObject: keeps going after finding first instance of object
+                // Because of constraints in addOperation:, it is safe to assume that there is exactly one instance of op in the array,
+                // making the removeObject: behavior unnecessary
+                NSUInteger index = [_operations indexOfObject:op];
+                if (index != NSNotFound) {
+                    [_operations removeObjectAtIndex:index];
+                    --_numExecutingOperations;
+                }
+            }
+
+            // TODO: start more ops?
+        }
+    }
+}
+
++ (BOOL)automaticallyNotifiesObserversOfOperations {
+    // This class manually notifies for operations, which generates changes in addOperation/s.
+    return NO;
 }
 
 + (BOOL)automaticallyNotifiesObserversOfOperationCount {
@@ -106,13 +162,52 @@ void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
  @Status Interoperable
 */
 - (void)addOperation:(NSOperation*)op {
-    _executeOperation(self, op);
+    @synchronized(op) {
+        if ([op isExecuting] || [op isFinished]) {
+            @throw [NSException exceptionWithName:NSInvalidArgumentException
+                                           reason:@"operation is already or finished executing"
+                                         userInfo:nil];
+        }
+
+        if (op._operationQueue) {
+            @throw [NSException exceptionWithName:NSInvalidArgumentException
+                                           reason:@"operation is already in an operation queue"
+                                         userInfo:nil];
+        }
+
+        op._operationQueue = self;
+
+        @synchronized(self) {
+            [self willChangeValueForKey:@"operations"];
+            [self willChangeValueForKey:@"operationCount"];
+            [_operations addObject:op];
+            [self didChangeValueForKey:@"operationCount"];
+            [self didChangeValueForKey:@"operations"];
+
+            [op addObserver:self forKeyPath:@"isFinished" options:0 context:(void*)_NSOperationQueue_OperationFinished];
+
+            if ((!_suspended) && (_numExecutingOperations < _maxConcurrentOperationCount)) {
+                _executeOperation(self, op);
+            } else {
+                _unstartedOperations.push(op);
+            }
+        }
+    }
 }
 
 /**
  @Status Interoperable
 */
 - (void)addOperations:(NSArray<NSOperation*>*)ops waitUntilFinished:(BOOL)wait {
+    for (NSOperation* operation in ops) {
+        [self addOperation:operation];
+    }
+
+    if (wait) {
+        for (NSOperation* operation in ops) {
+            [operation waitUntilFinished];
+        }
+    }
 }
 
 /**
@@ -120,6 +215,13 @@ void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
 */
 - (void)addOperationWithBlock:(void (^)(void))block {
     [self addOperation:[NSBlockOperation blockOperationWithBlock:block]];
+}
+
+/**
+ @Status Interoperable
+*/
+- (NSArray<__kindof NSOperation*>*)operations {
+    return [_operations copy];
 }
 
 /**
@@ -134,7 +236,7 @@ void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
 */
 - (void)cancelAllOperations {
     @synchronized(self) { // TODO: is this necessary?
-        for (NSOperation* operation in _operations) {
+        for (NSOperation* operation in _operations.get()) {
             [operation cancel];
         }
         // TODO: How to deal with removals?
@@ -178,7 +280,7 @@ void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
         }
 
         // Retarget the dispatch queue to a global queue with the right QOS
-        dispatch_set_target_queue(_dispatchQueue, dispatch_get_global_queue(_QOSClassForNSQualityOfService(quality), 0));
+        _setTargetQueueUsingQualityOfService(self);
     }
 }
 
@@ -215,7 +317,7 @@ void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
             dispatch_set_target_queue(_dispatchQueue, queue);
         } else {
             // Return to using qualityOfService
-            dispatch_set_target_queue(_dispatchQueue, dispatch_get_global_queue(_QOSClassForNSQualityOfService(_qualityOfService), 0));
+            _setTargetQueueUsingQualityOfService(self);
         }
     }
 }

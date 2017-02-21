@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     // Initialize GTest framework.
     int _argc = 1;
     char* _argv[] = { "UnitTests" };
-    testing::InitGoogleTest(&argc, argv);
+    testing::InitGoogleTest(&_argc, _argv);
 
 #ifdef WIN32
     if (FAILED(RoInitialize(RO_INIT_MULTITHREADED))) {
