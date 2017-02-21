@@ -62,6 +62,7 @@ static const NSString* const _NSOperationQueue_OperationFinished = @"_NSOperatio
     StrongId<NSCondition> _operationCountCondition;
 
     NSQualityOfService _qualityOfService;
+    BOOL _suspended;
 
     // This backs the user-set value of _underlyingQueue. _dispatchQueue is changed to target this if this is set.
     dispatch_queue_t _underlyingQueue;
@@ -105,10 +106,26 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
         _operations.attach([NSMutableArray new]);
         _operationCountCondition.attach([NSCondition new]);
 
+        _maxConcurrentOperationCount = NSOperationQueueDefaultMaxConcurrentOperationCount;
+
         _qualityOfService = NSQualityOfServiceDefault;
         _setTargetQueueUsingQualityOfService(self);
     }
     return self;
+}
+
+- (void)dealloc {
+    [_name release];
+
+    if (_dispatchQueue) {
+        dispatch_release(_dispatchQueue);
+    }
+
+    if (_underlyingQueue) {
+        dispatch_release(_underlyingQueue);
+    }
+
+    [super dealloc];
 }
 
 - (void)observeValueForKeyPath:(NSString*)keyPath ofObject:(id)object change:(NSDictionary*)change context:(void*)context {
@@ -122,8 +139,14 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
                 // making the removeObject: behavior unnecessary
                 NSUInteger index = [_operations indexOfObject:op];
                 if (index != NSNotFound) {
-                    [_operations removeObjectAtIndex:index];
                     --_numExecutingOperations;
+                    [op removeObserver:self forKeyPath:@"isFinished" context:(void*)_NSOperationQueue_OperationFinished];
+
+                    [self willChangeValueForKey:@"operations"];
+                    [self willChangeValueForKey:@"operationCount"];
+                    [_operations removeObjectAtIndex:index];
+                    [self didChangeValueForKey:@"operationCount"];
+                    [self didChangeValueForKey:@"operations"];
                 }
             }
 
@@ -186,7 +209,7 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
 
             [op addObserver:self forKeyPath:@"isFinished" options:0 context:(void*)_NSOperationQueue_OperationFinished];
 
-            if ((!_suspended) && (_numExecutingOperations < _maxConcurrentOperationCount)) {
+            if ((!_suspended) && (_numExecutingOperations <= _maxConcurrentOperationCount)) {
                 _executeOperation(self, op);
             } else {
                 _unstartedOperations.push(op);
@@ -287,6 +310,29 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
 /**
  @Status Interoperable
 */
+- (BOOL)isSuspended {
+    @synchronized(self) {
+        return _suspended;
+    }
+}
+
+/**
+ @Status Interoperable
+*/
+- (void)setSuspended:(BOOL)suspended {
+    @synchronized(self) {
+        _suspended = suspended;
+
+        while ((_numExecutingOperations <= _maxConcurrentOperationCount) && (!_unstartedOperations.empty())) {
+            _executeOperation(self, _unstartedOperations.front());
+            _unstartedOperations.pop();
+        }
+    }
+}
+
+/**
+ @Status Interoperable
+*/
 - (dispatch_queue_t)underlyingQueue {
     @synchronized(self) {
         return _underlyingQueue;
@@ -310,15 +356,21 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
             @throw [NSException exceptionWithName:NSInvalidArgumentException reason:@"underlyingQueue must not be main queue" userInfo:nil];
         }
 
-        _underlyingQueue = queue;
+        // release a ref to the old underlying queue if it exists
+        if (_underlyingQueue) {
+            dispatch_release(_underlyingQueue);
+        }
 
         if (queue) {
             // Change targets to the new underlying queue
+            dispatch_retain(queue);
             dispatch_set_target_queue(_dispatchQueue, queue);
         } else {
             // Return to using qualityOfService
             _setTargetQueueUsingQualityOfService(self);
         }
+
+        _underlyingQueue = queue;
     }
 }
 

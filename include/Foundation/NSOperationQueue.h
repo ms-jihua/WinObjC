@@ -26,9 +26,7 @@
 @class NSOperation;
 @class NSString;
 
-enum { NSOperationQueueDefaultMaxConcurrentOperationCount = -1 };
-
-enum { NSOperationQueuePriority_Count = 3 };
+enum { NSOperationQueueDefaultMaxConcurrentOperationCount = 32 }; // TODO: this value is supposed to be dynamically determined, but how?
 
 FOUNDATION_EXPORT_CLASS
 @interface NSOperationQueue : NSObject
