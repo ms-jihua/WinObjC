@@ -48,13 +48,14 @@ static inline long _QOSClassForNSQualityOfService(NSQualityOfService quality) {
 static const NSString* const _NSOperationQueueCurrentQueueKey = @"_NSOperationQueueCurrentQueueKey";
 
 static const NSString* const _NSOperationQueue_OperationFinished = @"_NSOperationQueue_OperationFinished";
+static const NSString* const _NSOperationQueue_OperationReady = @"_NSOperationQueue_OperationReady";
 
 @implementation NSOperationQueue {
 @private
     dispatch_queue_t _dispatchQueue;
 
     StrongId<NSMutableArray> _operations;
-    std::queue<NSOperation*> _unstartedOperations;
+    std::deque<NSOperation*> _unstartedOperations;
     NSInteger _numExecutingOperations;
 
     // Signalled when operationCount reaches 0, for waitUntilAllOperationsAreFinished
@@ -141,6 +142,7 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
                 if (index != NSNotFound) {
                     --_numExecutingOperations;
                     [op removeObserver:self forKeyPath:@"isFinished" context:(void*)_NSOperationQueue_OperationFinished];
+                    [op removeObserver:self forKeyPath:@"isReady" context:(void*)_NSOperationQueue_OperationReady];
 
                     [self willChangeValueForKey:@"operations"];
                     [self willChangeValueForKey:@"operationCount"];
@@ -151,6 +153,14 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
             }
 
             // TODO: start more ops?
+        }
+    } else if ((context == _NSOperationQueue_OperationReady) && ([object isKindOfClass:[NSOperation class]])) {
+        NSOperation* op = static_cast<NSOperation*>(object);
+        @synchronized(self) { // TODO: Is this the right synch
+            if ((!_suspended) && ([op isReady]) && (_numExecutingOperations <= _maxConcurrentOperationCount)) {
+                _executeOperation(self, op);
+            }
+            // TODO: what if it become not-ready?
         }
     }
 }
@@ -208,11 +218,12 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
             [self didChangeValueForKey:@"operations"];
 
             [op addObserver:self forKeyPath:@"isFinished" options:0 context:(void*)_NSOperationQueue_OperationFinished];
+            [op addObserver:self forKeyPath:@"isReady" options:0 context:(void*)_NSOperationQueue_OperationReady];
 
-            if ((!_suspended) && (_numExecutingOperations <= _maxConcurrentOperationCount)) {
+            if ((!_suspended) && ([op isReady]) && (_numExecutingOperations <= _maxConcurrentOperationCount)) {
                 _executeOperation(self, op);
             } else {
-                _unstartedOperations.push(op);
+                _unstartedOperations.push_back(op);
             }
         }
     }
@@ -323,9 +334,17 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
     @synchronized(self) {
         _suspended = suspended;
 
-        while ((_numExecutingOperations <= _maxConcurrentOperationCount) && (!_unstartedOperations.empty())) {
-            _executeOperation(self, _unstartedOperations.front());
-            _unstartedOperations.pop();
+        if (!_suspended) {
+            size_t i = 0;
+            while ((_numExecutingOperations <= _maxConcurrentOperationCount) && (i < _unstartedOperations.size())) {
+                NSOperation* op = _unstartedOperations[i];
+                if ([op isReady]) {
+                    _executeOperation(self, op);
+                    _unstartedOperations.erase(_unstartedOperations.begin() + i);
+                } else {
+                    ++i;
+                }
+            }
         }
     }
 }
