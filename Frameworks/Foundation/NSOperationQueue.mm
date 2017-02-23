@@ -50,6 +50,20 @@ static const NSString* const _NSOperationQueueCurrentQueueKey = @"_NSOperationQu
 static const NSString* const _NSOperationQueue_OperationFinished = @"_NSOperationQueue_OperationFinished";
 static const NSString* const _NSOperationQueue_OperationReady = @"_NSOperationQueue_OperationReady";
 
+@interface NSOperationQueue_MainQueue : NSOperationQueue
+@end
+
+@implementation NSOperationQueue_MainQueue
+
+- (dispatch_queue_t)underlyingQueue {
+    return dispatch_get_main_queue();
+}
+
+- (void)setUnderlyingQueue:(dispatch_queue_t)queue {
+}
+
+@end
+
 @implementation NSOperationQueue {
 @private
     dispatch_queue_t _dispatchQueue;
@@ -70,21 +84,25 @@ static const NSString* const _NSOperationQueue_OperationReady = @"_NSOperationQu
 }
 
 // Private helper that executes a single NSOperation on the dispatch queue and manages associated state.
-void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
+static void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
     dispatch_async(queue->_dispatchQueue, ^{
         // Get the currentQueue stored in the thread dictionary
         NSMutableDictionary* threadDictionary = [[NSThread currentThread] threadDictionary];
         StrongId<NSOperationQueue> currentQueue = [threadDictionary objectForKey:_NSOperationQueueCurrentQueueKey];
 
         // If this queue is not the current queue, store this queue while this operation is running, and restore it once it returns.
-        bool queueChanged = [queue isEqual:currentQueue];
+        bool queueChanged = ![queue isEqual:currentQueue];
         if (queueChanged) {
             [threadDictionary setObject:queue forKey:_NSOperationQueueCurrentQueueKey];
         }
 
         wil::ScopeExit([threadDictionary, currentQueue, queueChanged]() {
             if (queueChanged) {
-                [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
+                if (currentQueue) {
+                    [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
+                } else {
+                    [threadDictionary removeObjectForKey:_NSOperationQueueCurrentQueueKey];
+                }
             }
         });
 
@@ -110,7 +128,12 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
         _maxConcurrentOperationCount = NSOperationQueueDefaultMaxConcurrentOperationCount;
 
         _qualityOfService = NSQualityOfServiceDefault;
-        _setTargetQueueUsingQualityOfService(self);
+
+        if (dispatch_queue_t underlyingQueue = [self underlyingQueue]) {
+            dispatch_set_target_queue(_dispatchQueue, underlyingQueue);
+        } else {
+            _setTargetQueueUsingQualityOfService(self);
+        }
     }
     return self;
 }
@@ -179,15 +202,19 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
  @Status Interoperable
 */
 + (NSOperationQueue*)currentQueue {
-    return [[[NSThread currentThread] threadDictionary] objectForKey:_NSOperationQueueCurrentQueueKey];
+    NSThread* currentThread = [NSThread currentThread];
+    if ([currentThread isMainThread]) {
+        return [[self class] mainQueue];
+    }
+
+    return [[currentThread threadDictionary] objectForKey:_NSOperationQueueCurrentQueueKey];
 }
 
 /**
  @Status Interoperable
 */
 + (NSOperationQueue*)mainQueue {
-    static StrongId<NSOperationQueue> mainQueue = [[NSOperationQueue new] autorelease];
-    // TODO: Need to set up some reasonable defaults
+    static StrongId<NSOperationQueue> mainQueue = [[NSOperationQueue_MainQueue new] autorelease];
     return mainQueue;
 }
 
@@ -309,7 +336,7 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
 
         _qualityOfService = quality;
 
-        if (_underlyingQueue) {
+        if ([self underlyingQueue]) {
             return; // underlyingQueue overrides qualityOfService
         }
 

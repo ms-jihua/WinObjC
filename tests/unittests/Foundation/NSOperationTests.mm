@@ -612,3 +612,46 @@ TEST(NSOperation, NSBlockOperationInQueue) {
     ASSERT_TRUE([operation isFinished]);
     ASSERT_FALSE([operation isExecuting]);
 }
+
+TEST(NSOperation, MainQueue) {
+    NSOperationQueue* mainQueue = [NSOperationQueue mainQueue];
+
+    ASSERT_OBJCNE(mainQueue, nil);
+
+    // mainQueue has an unchangeable underlying queue
+    ASSERT_NO_THROW([mainQueue setUnderlyingQueue:nil]);
+    ASSERT_EQ([mainQueue underlyingQueue], dispatch_get_main_queue());
+    ASSERT_NO_THROW([mainQueue setUnderlyingQueue:dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)]);
+    ASSERT_EQ([mainQueue underlyingQueue], dispatch_get_main_queue());
+    ASSERT_NO_THROW([mainQueue setUnderlyingQueue:dispatch_get_main_queue()]);
+    ASSERT_EQ([mainQueue underlyingQueue], dispatch_get_main_queue());
+}
+
+TEST(NSOperation, CurrentQueue) {
+// TODO #: WinObjC's implementation of NSThread does not consider this context the main thread - this is a bug
+#if !WINOBJC
+    // Check that the current queue on the main thread is the main queue
+    EXPECT_OBJCEQ([NSOperationQueue mainQueue], [NSOperationQueue currentQueue]);
+#endif
+
+    // Check that the current queue is correct at each stage
+    __block NSOperationQueue* currentQueue;
+    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+    __block NSOperation* operation = [NSBlockOperation blockOperationWithBlock:^{
+        currentQueue = [NSOperationQueue currentQueue];
+    }];
+
+    __block NSOperationQueue* currentQueue2;
+    NSOperationQueue* queue2 = [[NSOperationQueue new] autorelease];
+    NSOperation* operation2 = [NSBlockOperation blockOperationWithBlock:^{
+        [queue addOperation:operation];
+        currentQueue2 = [NSOperationQueue currentQueue];
+    }];
+
+    [queue2 addOperation:operation2];
+
+    [operation waitUntilFinished];
+    [operation2 waitUntilFinished];
+    EXPECT_OBJCEQ(queue, currentQueue);
+    EXPECT_OBJCEQ(queue2, currentQueue2);
+}
