@@ -90,18 +90,41 @@ static void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
         NSMutableDictionary* threadDictionary = [[NSThread currentThread] threadDictionary];
         StrongId<NSOperationQueue> currentQueue = [threadDictionary objectForKey:_NSOperationQueueCurrentQueueKey];
 
-        // If this queue is not the current queue, store this queue while this operation is running, and restore it once it returns.
+        // // If this queue is not the current queue, store this queue while this operation is running, and restore it once it returns.
+        // bool queueChanged = ![queue isEqual:currentQueue];
+        // if (queueChanged) {
+        //     [threadDictionary setObject:queue forKey:_NSOperationQueueCurrentQueueKey];
+        // }
+
+        // wil::ScopeExit([threadDictionary, currentQueue, queueChanged]() {
+        //     if (queueChanged) {
+        //         if (currentQueue) {
+        //             [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
+        //         } else {
+        //             [threadDictionary removeObjectForKey:_NSOperationQueueCurrentQueueKey];
+        //         }
+        //     }
+        // });
+
         bool queueChanged = ![queue isEqual:currentQueue];
-        if (queueChanged) {
-            [threadDictionary setObject:queue forKey:_NSOperationQueueCurrentQueueKey];
+
+        if (![[NSThread currentThread] isMainThread]) {
+            if (queueChanged) {
+                [threadDictionary setObject:queue forKey:_NSOperationQueueCurrentQueueKey];
+            }
         }
 
-        wil::ScopeExit([threadDictionary, currentQueue, queueChanged]() {
-            if (queueChanged) {
-                if (currentQueue) {
-                    [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
-                } else {
-                    [threadDictionary removeObjectForKey:_NSOperationQueueCurrentQueueKey];
+        // TODO: Need to restore at operation finish
+
+        auto foo = wil::ScopeExit([threadDictionary, currentQueue, queueChanged]() {
+
+            if (![[NSThread currentThread] isMainThread]) {
+                if (queueChanged) {
+                    if (currentQueue) {
+                        [threadDictionary setObject:currentQueue forKey:_NSOperationQueueCurrentQueueKey];
+                    } else {
+                        [threadDictionary removeObjectForKey:_NSOperationQueueCurrentQueueKey];
+                    }
                 }
             }
         });
@@ -110,6 +133,7 @@ static void _executeOperation(NSOperationQueue* queue, NSOperation* operation) {
 
         // Run the actual operation
         [operation start];
+
     });
 }
 
