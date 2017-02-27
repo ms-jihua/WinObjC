@@ -36,6 +36,37 @@ static void (^_completionBlockPopulatingConditionAndFlag(void (^completionBlock)
     });
 }
 
+@interface TestOperation : NSOperation
++ (instancetype)testOperationWithCompletionBlock:(void (^)())completionBlock;
+@property (retain) NSCondition* completionCondition;
+@property BOOL completionBlockCalled;
+@end
+
+@implementation TestOperation
+- (instancetype)init {
+    if (self = [super init]) {
+        _completionCondition = [[NSCondition new] autorelease];
+        _completionBlockCalled = NO;
+    }
+    return self;
+}
+
++ (instancetype)testOperationWithCompletionBlock:(void (^)())completionBlock {
+    TestOperation* ret = [[[self class] new] autorelease];
+    [ret setCompletionBlock:^void() {
+        if (completionBlock) {
+            completionBlock();
+        }
+        [ret.completionCondition lock];
+        ret.completionBlockCalled = YES;
+        [ret.completionCondition broadcast];
+        [ret.completionCondition unlock];
+    }];
+    return ret;
+}
+
+@end
+
 TEST(NSOperation, NSOperationDealloc) {
     NSOperationQueue* queue = [[NSOperationQueue alloc] init];
     ASSERT_NO_THROW([queue release]);
@@ -47,30 +78,32 @@ TEST(NSOperation, NSOperationDealloc) {
 TEST(NSOperation, NSOperation) {
     NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
 
-    NSOperation* operation = [[NSOperation new] autorelease];
+    __block TestOperation* operation = [TestOperation testOperationWithCompletionBlock:^void() {
+        [operation waitUntilFinished]; // Should not deadlock, but we cannot test this
+        ASSERT_TRUE([operation isFinished]);
+    }];
 
-    NSCondition* completionCondition = nil;
-    BOOL completionBlockCalled = NO;
-    [operation setCompletionBlock:_completionBlockPopulatingConditionAndFlag(
-                                      ^{
-                                          [operation waitUntilFinished]; // Should not deadlock, but we cannot test this
-                                          ASSERT_TRUE([operation isFinished]);
-                                      },
-                                      &completionCondition,
-                                      &completionBlockCalled)];
-
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     [queue addOperation:operation];
-
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
-    ASSERT_TRUE(completionBlockCalled);
+    ASSERT_TRUE(operation.completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
     ASSERT_FALSE([operation isExecuting]);
+}
+
+TEST(NSOperation, AddOperationWithBlock) {
+    NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+    __block bool flag = false;
+    [queue addOperationWithBlock:^void() {
+        flag = true;
+    }];
+    [queue waitUntilAllOperationsAreFinished];
+    ASSERT_TRUE(flag);
 }
 
 TEST(NSOperation, CancelOutOfQueue) {
@@ -84,45 +117,35 @@ TEST(NSOperation, CancelOutOfQueue) {
 TEST(NSOperation, NSOperationCancellation) {
     NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
 
-    NSOperation* cancelledOperation = [[NSOperation new] autorelease];
+    __block TestOperation* operation = [TestOperation testOperationWithCompletionBlock:^void() {
+        [operation waitUntilFinished]; // Should not deadlock, but we cannot test this
+        ASSERT_TRUE([operation isFinished]);
+    }];
 
-    NSCondition* completionCondition = nil;
-    BOOL completionBlockCalled = NO;
-    [cancelledOperation setCompletionBlock:_completionBlockPopulatingConditionAndFlag(
-                                               ^{
-                                                   [cancelledOperation waitUntilFinished]; // Should not deadlock, but we cannot test this
-                                                   ASSERT_TRUE([cancelledOperation isFinished]);
-                                               },
-                                               &completionCondition,
-                                               &completionBlockCalled)];
+    [operation.completionCondition lock];
 
-    [completionCondition lock];
-
-    [cancelledOperation cancel];
+    [operation cancel];
 
     [queue addOperation:cancelledOperation];
+    [operation waitUntilFinished];
 
-    [cancelledOperation waitUntilFinished];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
-
-    ASSERT_TRUE(completionBlockCalled);
-    ASSERT_FALSE([cancelledOperation isExecuting]);
-    ASSERT_TRUE([cancelledOperation isCancelled]);
+    ASSERT_TRUE(operation.completionBlockCalled);
+    ASSERT_FALSE([operation isExecuting]);
+    ASSERT_TRUE([operation isCancelled]);
 }
 
 TEST(NSOperation, NSOperationSuspend) {
     NSOperationQueue* queue = [[NSOperationQueue alloc] init];
 
-    NSOperation* suspendOperation = [[NSOperation alloc] init];
-
-    __block NSCondition* suspendCondition = [NSCondition new];
+    __block NSCondition* suspendCondition = [[NSCondition new] autorelease];
     __block bool shouldBeTrue = false;
 
-    [suspendOperation setCompletionBlock:^{
-        [suspendOperation waitUntilFinished]; // Should not deadlock, but we cannot test this
-        ASSERT_TRUE([suspendOperation isFinished]);
+    __block TestOperation* operation = [TestOperation testOperationWithCompletionBlock:^void() {
+        [operation waitUntilFinished]; // Should not deadlock, but we cannot test this
+        ASSERT_TRUE([operation isFinished]);
 
         [suspendCondition lock];
         ASSERT_TRUE(shouldBeTrue);
@@ -130,7 +153,7 @@ TEST(NSOperation, NSOperationSuspend) {
     }];
 
     [queue setSuspended:YES];
-    [queue addOperation:suspendOperation];
+    [queue addOperation:operation];
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     [suspendCondition lock];
@@ -139,12 +162,13 @@ TEST(NSOperation, NSOperationSuspend) {
     [suspendCondition unlock];
 
     ASSERT_TRUE([queue isSuspended]);
-    ASSERT_FALSE([suspendOperation isExecuting]);
+    ASSERT_FALSE([operation isExecuting]);
 
     [queue setSuspended:NO];
     ASSERT_FALSE([queue isSuspended]);
 
-    [suspendOperation waitUntilFinished];
+    [operation waitUntilFinished];
+    ASSERT_TRUE([operation isFinished]);
 }
 
 @interface TestObserver : NSObject
@@ -285,14 +309,14 @@ TEST(NSOperation, NSOperationConcurrentSubclass) {
                                       &completionCondition,
                                       &completionBlockCalled)];
 
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     [queue addOperation:operation];
 
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
     ASSERT_TRUE(completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
@@ -332,13 +356,13 @@ TEST(NSOperation, NSOperationNonconcurrentSubclass) {
                                       &completionCondition,
                                       &completionBlockCalled)];
 
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     [queue addOperation:operation];
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
     ASSERT_TRUE(completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
@@ -421,15 +445,15 @@ TEST(NSOperation, NSOperationWithDependenciesDoesRun) {
     EXPECT_FALSE(dep2Completed);
     EXPECT_FALSE(completionBlockCalled);
 
-    [completionCondition lock]; // dep2 will trigger operation to complete.
+    [operation.completionCondition lock]; // dep2 will trigger operation to complete.
     [dep2Condition lock];
     [queue addOperation:dependency2];
     [dep2Condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
     [dep2Condition unlock];
     EXPECT_TRUE(dep2Completed);
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
+    [operation.completionCondition unlock];
     EXPECT_TRUE(completionBlockCalled);
 }
 
@@ -456,7 +480,7 @@ TEST(NSOperation, NSOperationWithDependenciesInDifferentPrioritiesDoesRun) {
     // Stage the operation before its dependencies.
     [queue addOperation:operation];
 
-    [completionCondition lock]; // dep1 will trigger operation to complete.
+    [operation.completionCondition lock]; // dep1 will trigger operation to complete.
     [dep1Condition lock];
     [queue addOperation:dependency1];
     [dep1Condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
@@ -464,8 +488,8 @@ TEST(NSOperation, NSOperationWithDependenciesInDifferentPrioritiesDoesRun) {
     EXPECT_TRUE(dep1Completed);
     EXPECT_FALSE(completionBlockCalled);
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2.0]];
+    [operation.completionCondition unlock];
     EXPECT_TRUE(completionBlockCalled);
 }
 
@@ -533,7 +557,7 @@ TEST(NSOperation, RunConcurrentOperationManually) {
                                       &completionCondition,
                                       &completionBlockCalled)];
 
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [operation start];
@@ -541,8 +565,8 @@ TEST(NSOperation, RunConcurrentOperationManually) {
 
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
     ASSERT_TRUE(completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
@@ -563,7 +587,7 @@ TEST(NSOperation, RunNonconcurrentOperationManually) {
                                       &completionCondition,
                                       &completionBlockCalled)];
 
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [operation start];
@@ -571,8 +595,8 @@ TEST(NSOperation, RunNonconcurrentOperationManually) {
 
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
     ASSERT_TRUE(completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
@@ -599,14 +623,14 @@ TEST(NSOperation, NSBlockOperationInQueue) {
                                       &completionCondition,
                                       &completionBlockCalled)];
 
-    [completionCondition lock];
+    [operation.completionCondition lock];
 
     [queue addOperation:operation];
 
     [operation waitUntilFinished];
 
-    [completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
-    [completionCondition unlock];
+    [operation.completionCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+    [operation.completionCondition unlock];
 
     ASSERT_TRUE(completionBlockCalled);
     ASSERT_TRUE([operation isFinished]);
@@ -758,16 +782,6 @@ TEST(NSOperation, AddOperations) {
     EXPECT_EQ(5, opsFinished);
     EXPECT_EQ(5, opsFinished);
     EXPECT_EQ(5, opsFinished);
-}
-
-TEST(NSOperation, AddOperationWithBlock) {
-    NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
-    __block bool flag = false;
-    [queue addOperationWithBlock:^void() {
-        flag = true;
-    }];
-    [queue waitUntilAllOperationsAreFinished];
-    ASSERT_TRUE(flag);
 }
 
 // @interface CurrentQueueTester : NSThread
