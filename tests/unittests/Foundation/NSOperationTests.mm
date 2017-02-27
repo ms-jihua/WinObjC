@@ -682,7 +682,7 @@ TEST(NSOperation, CurrentQueue) {
 @end
 
 TEST(NSOperation, AddOperations) {
-    __block NSCondition* startOpCondition = [[NSCondition new] autorelease];
+    NSCondition* startOpCondition = [[NSCondition new] autorelease];
     __block size_t opsFinished = 0;
     void (^incrementOpsFinished)() = ^void() {
         [startOpCondition lock];
@@ -711,7 +711,7 @@ TEST(NSOperation, AddOperations) {
     ASSERT_EQ(0, opsFinished);
 
     // Test addOperations with waitUntilFinished:YES, using a separate start condition
-    __block NSCondition* startOpCondition2 = [[NSCondition new] autorelease];
+    NSCondition* startOpCondition2 = [[NSCondition new] autorelease];
     void (^incrementOpsFinished2)() = ^void() {
         [startOpCondition2 lock];
         [startOpCondition2 wait];
@@ -724,29 +724,43 @@ TEST(NSOperation, AddOperations) {
     ];
 
     AddOperationsThread* waitThread = [AddOperationsThread threadWithQueue:queue operations:ops2 wait:YES];
-    [waitThread start]; // TODO: Why does this segfault?
+    [waitThread start];
 
     // Thread should be hung and no operations should have finished
-    // [waitThread.startedCondition lock];
-    // while (!waitThread.executing) {
-    //     [waitThread.startedCondition wait];
-    // }
-    // [waitThread.startedCondition unlock];
-    // ASSERT_EQ(0, opsFinished);
+    [waitThread.startedCondition lock];
+    while (!waitThread.executing) {
+        [waitThread.startedCondition wait];
+    }
+    [waitThread.startedCondition unlock];
+    ASSERT_EQ(0, opsFinished);
 
     // Allow ops2 to to run, then wait until the thread is finished
-    // [startOpCondition2 broadcast];
-    // [waitThread.finishedCondition lock];
-    // while (!waitThread.finished) {
-    //     [waitThread.finishedCondition wait];
-    // }
-    // [waitThread.finishedCondition unlock];
-    // // Both operations in ops2 should have finished, but none in ops
+    [startOpCondition2 broadcast];
+    [waitThread.finishedCondition lock];
+    [waitThread.finishedCondition wait];
+    [waitThread.finishedCondition unlock];
+    // Both operations in ops2 should have finished, but none in ops
+    [startOpCondition broadcast]; // Prior ops block execution here :(
     // ASSERT_EQ(2, opsFinished);
 
-    // // All operations should be finished soon after the condition is broadcast
-    // [startOpCondition broadcast];
-    // ASSERT_EQ(5, opsFinished);
+    // All operations should be finished soon after the condition is broadcast
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+    EXPECT_EQ(5, opsFinished);
+}
+
+TEST(NSOperation, AddOperationWithBlock) {
 }
 
 // @interface CurrentQueueTester : NSThread
