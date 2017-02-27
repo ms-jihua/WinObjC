@@ -194,6 +194,11 @@ void _setTargetQueueUsingQualityOfService(NSOperationQueue* queue) {
                     [self willChangeValueForKey:@"operations"];
                     [self willChangeValueForKey:@"operationCount"];
                     [_operations removeObjectAtIndex:index];
+                    [_operationCountCondition lock];
+                    if (self.operationCount == 0) {
+                        [_operationCountCondition broadcast];
+                    }
+                    [_operationCountCondition unlock];
                     [self didChangeValueForKey:@"operationCount"];
                     [self didChangeValueForKey:@"operations"];
                 }

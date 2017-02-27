@@ -761,6 +761,13 @@ TEST(NSOperation, AddOperations) {
 }
 
 TEST(NSOperation, AddOperationWithBlock) {
+    NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+    __block bool flag = false;
+    [queue addOperationWithBlock:^void() {
+        flag = true;
+    }];
+    [queue waitUntilAllOperationsAreFinished];
+    ASSERT_TRUE(flag);
 }
 
 // @interface CurrentQueueTester : NSThread
