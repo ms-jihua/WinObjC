@@ -837,39 +837,3 @@ TEST(NSOperation, AddOperationWithBlock) {
     [queue waitUntilAllOperationsAreFinished];
     ASSERT_TRUE(flag);
 }
-
-// @interface CurrentQueueTester : NSThread
-// @property (retain) NSCondition* condition;
-// @end
-
-// @implementation CurrentQueueTester
-
-// - (void)main {
-//     ASSERT_OBJCEQ(nil, [NSOperationQueue currentQueue]);
-
-//     __block NSOperationQueue* currentQueue;
-//     __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
-//     __block NSOperation* operation = [NSBlockOperation blockOperationWithBlock:^{
-//         currentQueue = [NSOperationQueue currentQueue];
-//     }];
-
-//     [queue addOperation:operation];
-//     [operation waitUntilFinished];
-//     ASSERT_OBJCEQ(queue, currentQueue);
-
-//     ASSERT_OBJCEQ(nil, [NSOperationQueue currentQueue]);
-//     [_condition broadcast];
-// }
-
-// @end
-
-// TEST(NSOperation, CurrentQueue_SameThread) {
-//     CurrentQueueTester* testThread = [[CurrentQueueTester new] autorelease];
-
-//     [testThread.condition lock];
-//     [testThread start];
-//     while (![testThread isFinished]) {
-//         [testThread.condition wait];
-//     }
-//     [testThread.condition unlock];
-// }
