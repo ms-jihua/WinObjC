@@ -694,101 +694,6 @@ TEST(NSOperation, CurrentQueue) {
     EXPECT_OBJCEQ(queue2, currentQueue2);
 }
 
-// @interface AddOperationsThread : NSThread
-// + (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait;
-// @property (retain) NSOperationQueue* queue;
-// @property (retain) NSArray<NSOperation*>* ops;
-// @property bool wait;
-// @property (retain) NSCondition* startedCondition;
-// @property (retain) NSCondition* finishedCondition;
-// @end
-
-// @implementation AddOperationsThread
-// + (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait {
-//     AddOperationsThread* ret = [[self new] autorelease];
-//     ret.queue = queue;
-//     ret.ops = ops;
-//     ret.wait = wait;
-//     return ret;
-// }
-
-// - (void)main {
-//     [_startedCondition broadcast];
-//     [_queue addOperations:_ops waitUntilFinished:_wait];
-//     [_finishedCondition broadcast];
-// }
-// @end
-
-// TEST(NSOperation, AddOperations) {
-//     __block NSCondition* startOpCondition = [[NSCondition new] autorelease];
-//     __block size_t opsFinished = 0;
-//     void (^incrementOpsFinished)() = ^void() {
-//         [startOpCondition lock];
-//         [startOpCondition wait];
-//         ++opsFinished;
-//         [startOpCondition unlock];
-//     };
-
-//     __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
-//     [queue setMaxConcurrentOperationCount:5];
-//     ASSERT_EQ(5, [queue maxConcurrentOperationCount]);
-
-//     // Test addOperations with waitUntilFinished:NO
-//     NSArray<NSOperation*>* ops = @[
-//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
-//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
-//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)]
-//     ];
-//     AddOperationsThread* nonWaitThread = [AddOperationsThread threadWithQueue:queue operations:ops wait:NO];
-//     [nonWaitThread start];
-
-//     // Should be 0 ops finished even if the thread completed
-//     [nonWaitThread.finishedCondition lock];
-//     while (!nonWaitThread.finished) {
-//         [nonWaitThread.finishedCondition wait];
-//     }
-//     [nonWaitThread.finishedCondition unlock];
-//     ASSERT_EQ(0, opsFinished);
-
-//     // Test addOperations with waitUntilFinished:YES, using a separate start condition
-//     __block NSCondition* startOpCondition2 = [[NSCondition new] autorelease];
-//     void (^incrementOpsFinished2)() = ^void() {
-//         [startOpCondition2 lock];
-//         [startOpCondition2 wait];
-//         ++opsFinished;
-//         [startOpCondition2 unlock];
-//     };
-//     NSArray<NSOperation*>* ops2 = @[
-//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
-//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)]
-//     ];
-
-//     AddOperationsThread* waitThread = [AddOperationsThread threadWithQueue:queue operations:ops2 wait:YES];
-//     [waitThread start];
-
-//     // Thread should be hung and no operations should have finished
-//     [waitThread.startedCondition lock];
-//     while (!waitThread.executing) {
-//         [waitThread.startedCondition wait];
-//     }
-//     [waitThread.startedCondition unlock];
-//     ASSERT_EQ(0, opsFinished);
-
-//     // Allow ops2 to to run, then wait until the thread is finished
-//     [startOpCondition2 broadcast];
-//     [waitThread.finishedCondition lock];
-//     [waitThread.finishedCondition wait];
-//     [waitThread.finishedCondition unlock];
-
-//     ASSERT_EQ(5, [queue maxConcurrentOperationCount]);
-//     // Both operations in ops2 should have finished, but none in ops
-//     // [startOpCondition broadcast]; // Prior ops block execution here :(
-//     // ASSERT_EQ(2, opsFinished);
-
-//     // All operations should be finished soon after the condition is broadcast
-//     EXPECT_EQ(5, opsFinished);
-// }
-
 @interface BlockThread : NSThread
 - (instancetype)initWithBlock:(void (^)())block;
 @property (copy) void (^block)();
@@ -828,9 +733,11 @@ TEST(NSOperation, AddOperations) {
         [queue addOperations:ops waitUntilFinished:YES];
     }] autorelease];
     [addOperationsThread start];
-    // [NSThread sleepForTimeInterval:1];
+
+    // TODO: Do this better
     while (queue.operationCount < 3) {
     }
+
     ASSERT_OBJCEQ(ops, [queue operations]);
     ASSERT_EQ([ops count], [queue operationCount]);
     ASSERT_TRUE([addOperationsThread isExecuting]);
@@ -852,12 +759,10 @@ TEST(NSOperation, AddOperations) {
     }] autorelease];
     [addOperationsThread2 start];
 
+    // TODO: Do this better
     while (queue.operationCount < 5) {
     }
 
-    // [queue addOperations:ops waitUntilFinished:NO];
-    // while (queue.operationCount < 5) {
-    // }
     ASSERT_EQ(5, [queue operationCount]);
     ASSERT_EQ(0, opsFinished);
 
@@ -866,8 +771,11 @@ TEST(NSOperation, AddOperations) {
     for (NSOperation* op in ops) {
         [op waitUntilFinished];
     }
+
+    // TODO: Do this better
     while (![addOperationsThread isFinished]) {
     }
+
     ASSERT_EQ(3, opsFinished);
 
     [startLock2 broadcast];
