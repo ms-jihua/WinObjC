@@ -50,7 +50,7 @@ static wchar_t TAG[] = L"NSOperation";
     std::condition_variable_any _finishCondition;
 
     // The locks. _finishLock should be taken before _completionBlockLock if both need to be taken. No other locks should overlap.
-    std::recursive_mutex _finishLock; // guards _finished and _cancelled
+    std::recursive_mutex _finishLock; // guards _finished, _cancelled, and _executing
     std::recursive_mutex _dependenciesLock; // guards _dependencies, _outstandingDependenciesCount and _ready
     std::recursive_mutex _completionBlockLock; // guards _completionBlock
 }
@@ -220,6 +220,7 @@ static const NSString* NSOperationContext = @"context";
  @Status Interoperable
 */
 - (BOOL)isCancelled {
+    std::lock_guard<std::recursive_mutex> lock(_finishLock);
     return _cancelled;
 }
 
@@ -227,6 +228,7 @@ static const NSString* NSOperationContext = @"context";
  @Status Interoperable
 */
 - (BOOL)isFinished {
+    std::lock_guard<std::recursive_mutex> lock(_finishLock);
     return _finished;
 }
 
@@ -234,6 +236,7 @@ static const NSString* NSOperationContext = @"context";
  @Status Interoperable
 */
 - (BOOL)isExecuting {
+    std::lock_guard<std::recursive_mutex> lock(_finishLock);
     return _executing;
 }
 

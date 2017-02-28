@@ -40,7 +40,7 @@ static void (^_completionBlockPopulatingConditionAndFlag(void (^completionBlock)
 // https://developer.apple.com/reference/foundation/nscondition?language=objc
 // This can be replaced/re-implemented based on NSConditionLock once that has a stable implementation
 @interface _NSBooleanCondition : NSObject
-- (void)waitUntilDate:(NSDate*)limit;
+- (BOOL)waitUntilDate:(NSDate*)limit;
 - (void)broadcast;
 @property (readonly) NSCondition* condition;
 @property (readonly) bool isOpen;
@@ -55,8 +55,8 @@ static void (^_completionBlockPopulatingConditionAndFlag(void (^completionBlock)
     return self;
 }
 
-- (void)waitUntilDate:(NSDate*)limit {
-    BOOL ret;
+- (BOOL)waitUntilDate:(NSDate*)limit {
+    BOOL ret = YES;
     [_condition lock];
     while (!_isOpen) {
         ret = [_condition waitUntilDate:limit];
@@ -812,12 +812,10 @@ TEST(NSOperation, AddOperations) {
     [queue setMaxConcurrentOperationCount:5];
 
     __block size_t opsFinished = 0;
-    __block NSConditionLock* startLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
+    __block _NSBooleanCondition* startLock = [[_NSBooleanCondition new] autorelease];
     void (^incrementOpsFinished)() = ^void() {
-        ASSERT_TRUE_MSG([startLock lockWhenCondition:YES beforeDate:[NSDate dateWithTimeIntervalSinceNow:2]],
-                        "Operation was not allowed to start in time.");
+        ASSERT_TRUE_MSG([startLock waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation was not allowed to start in time.");
         ++opsFinished;
-        [startLock unlock];
     };
 
     __block NSArray<NSOperation*>* ops = @[
@@ -839,24 +837,31 @@ TEST(NSOperation, AddOperations) {
     ASSERT_FALSE([addOperationsThread isFinished]);
     ASSERT_EQ(0, opsFinished);
 
-    __block NSConditionLock* startLock2 = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
+    __block _NSBooleanCondition* startLock2 = [[_NSBooleanCondition new] autorelease];
     void (^incrementOpsFinished2)() = ^void() {
-        ASSERT_TRUE_MSG([startLock2 lockWhenCondition:YES beforeDate:[NSDate dateWithTimeIntervalSinceNow:2]],
-                        "Operation was not allowed to start in time.");
+        ASSERT_TRUE_MSG([startLock2 waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation was not allowed to start in time.");
         ++opsFinished;
-        [startLock2 unlock];
     };
 
-    NSArray<NSOperation*>* ops2 = @[
+    __block NSArray<NSOperation*>* ops2 = @[
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
     ];
-    [queue addOperations:ops waitUntilFinished:NO];
+    NSThread* addOperationsThread2 = [[[BlockThread alloc] initWithBlock:^void() {
+        [queue addOperations:ops2 waitUntilFinished:NO];
+    }] autorelease];
+    [addOperationsThread2 start];
+
+    while (queue.operationCount < 5) {
+    }
+
+    // [queue addOperations:ops waitUntilFinished:NO];
+    // while (queue.operationCount < 5) {
+    // }
     ASSERT_EQ(5, [queue operationCount]);
     ASSERT_EQ(0, opsFinished);
 
-    ASSERT_TRUE_MSG([startLock tryLock], "Failed to start operations.");
-    [startLock unlockWithCondition:YES];
+    [startLock broadcast];
 
     for (NSOperation* op in ops) {
         [op waitUntilFinished];
@@ -865,8 +870,7 @@ TEST(NSOperation, AddOperations) {
     }
     ASSERT_EQ(3, opsFinished);
 
-    ASSERT_TRUE_MSG([startLock2 tryLock], "Failed to start operations.");
-    [startLock2 unlockWithCondition:YES];
+    [startLock2 broadcast];
 
     for (NSOperation* op in ops2) {
         [op waitUntilFinished];
@@ -878,15 +882,12 @@ TEST(NSOperation, AddOperation_AndValidateState) {
     __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
     [queue setSuspended:YES];
 
-    __block NSConditionLock* startedOperationLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
-    __block NSConditionLock* finishOperationLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
+    __block _NSBooleanCondition* startedCondition = [[_NSBooleanCondition new] autorelease];
+    __block _NSBooleanCondition* finishCondition = [[_NSBooleanCondition new] autorelease];
     NSOperation* operation = [NSBlockOperation blockOperationWithBlock:^void() {
-        if ([startedOperationLock tryLock]) {
-            [startedOperationLock unlockWithCondition:YES];
-        }
-
-        [finishOperationLock lockWhenCondition:YES];
-        [finishOperationLock unlock];
+        [startedCondition broadcast];
+        ASSERT_TRUE_MSG([finishCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                        "Operation was not allowed to finish in time.");
     }];
 
     // Validate the initial state of the queue and operation
@@ -904,16 +905,14 @@ TEST(NSOperation, AddOperation_AndValidateState) {
 
     // Unsuspend the queue. The operation should start shortly.
     [queue setSuspended:NO];
-    [startedOperationLock lockWhenCondition:YES];
-    [startedOperationLock unlock];
+    ASSERT_TRUE_MSG([startedCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation did not start in time.");
     ASSERT_EQ(1, queue.operationCount);
     ASSERT_OBJCEQ(@[ operation ], queue.operations);
     ASSERT_TRUE(operation.isExecuting);
     ASSERT_FALSE(operation.isFinished);
 
     // Allow the operation to run. The operation should finish shortly.
-    ASSERT_TRUE_MSG([finishOperationLock tryLock], "Failed to allow operation to finish.");
-    [finishOperationLock unlockWithCondition:YES];
+    [finishCondition broadcast];
     [queue waitUntilAllOperationsAreFinished];
     ASSERT_EQ(0, queue.operationCount);
     ASSERT_OBJCEQ(@[], queue.operations);
