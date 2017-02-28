@@ -53,3 +53,31 @@ void deleteFile(NSString* name) {
         [[NSFileManager defaultManager] removeItemAtPath:fullPath error:nil];
     }
 };
+
+@implementation _NSBooleanCondition
+- (instancetype)init {
+    if (self = [super init]) {
+        _condition = [[NSCondition new] autorelease];
+        _isOpen = false;
+    }
+    return self;
+}
+
+- (void)waitUntilDate:(NSDate*)limit {
+    BOOL ret;
+    [_condition lock];
+    while (!_isOpen) {
+        ret = [_condition waitUntilDate:limit];
+    }
+    [_condition unlock];
+    return ret;
+}
+
+- (void)broadcast {
+    [_condition lock];
+    _isOpen = YES;
+    [_condition broadcast];
+    [_condition unlock];
+}
+
+@end

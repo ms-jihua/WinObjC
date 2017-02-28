@@ -1,6 +1,6 @@
 //******************************************************************************
 //
-// Copyright (c) 2015 Microsoft Corporation. All rights reserved.
+// Copyright (c) Microsoft. All rights reserved.
 //
 // This code is licensed under the MIT License (MIT).
 //
@@ -35,6 +35,44 @@ static void (^_completionBlockPopulatingConditionAndFlag(void (^completionBlock)
         [cond unlock];
     });
 }
+
+// Convenience class that wraps an NSCondition and an associated boolean, and implements the NSCondition usage pattern documented in:
+// https://developer.apple.com/reference/foundation/nscondition?language=objc
+// This can be replaced/re-implemented based on NSConditionLock once that has a stable implementation
+@interface _NSBooleanCondition : NSObject
+- (void)waitUntilDate:(NSDate*)limit;
+- (void)broadcast;
+@property (readonly) NSCondition* condition;
+@property (readonly) bool isOpen;
+@end
+
+@implementation _NSBooleanCondition
+- (instancetype)init {
+    if (self = [super init]) {
+        _condition = [[NSCondition new] autorelease];
+        _isOpen = false;
+    }
+    return self;
+}
+
+- (void)waitUntilDate:(NSDate*)limit {
+    BOOL ret;
+    [_condition lock];
+    while (!_isOpen) {
+        ret = [_condition waitUntilDate:limit];
+    }
+    [_condition unlock];
+    return ret;
+}
+
+- (void)broadcast {
+    [_condition lock];
+    _isOpen = YES;
+    [_condition broadcast];
+    [_condition unlock];
+}
+
+@end
 
 TEST(NSOperation, NSOperationDealloc) {
     NSOperationQueue* queue = [[NSOperationQueue alloc] init];
@@ -656,108 +694,231 @@ TEST(NSOperation, CurrentQueue) {
     EXPECT_OBJCEQ(queue2, currentQueue2);
 }
 
-@interface AddOperationsThread : NSThread
-+ (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait;
-@property (retain) NSOperationQueue* queue;
-@property (retain) NSArray<NSOperation*>* ops;
-@property bool wait;
-@property (retain) NSCondition* startedCondition;
-@property (retain) NSCondition* finishedCondition;
+// @interface AddOperationsThread : NSThread
+// + (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait;
+// @property (retain) NSOperationQueue* queue;
+// @property (retain) NSArray<NSOperation*>* ops;
+// @property bool wait;
+// @property (retain) NSCondition* startedCondition;
+// @property (retain) NSCondition* finishedCondition;
+// @end
+
+// @implementation AddOperationsThread
+// + (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait {
+//     AddOperationsThread* ret = [[self new] autorelease];
+//     ret.queue = queue;
+//     ret.ops = ops;
+//     ret.wait = wait;
+//     return ret;
+// }
+
+// - (void)main {
+//     [_startedCondition broadcast];
+//     [_queue addOperations:_ops waitUntilFinished:_wait];
+//     [_finishedCondition broadcast];
+// }
+// @end
+
+// TEST(NSOperation, AddOperations) {
+//     __block NSCondition* startOpCondition = [[NSCondition new] autorelease];
+//     __block size_t opsFinished = 0;
+//     void (^incrementOpsFinished)() = ^void() {
+//         [startOpCondition lock];
+//         [startOpCondition wait];
+//         ++opsFinished;
+//         [startOpCondition unlock];
+//     };
+
+//     __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+//     [queue setMaxConcurrentOperationCount:5];
+//     ASSERT_EQ(5, [queue maxConcurrentOperationCount]);
+
+//     // Test addOperations with waitUntilFinished:NO
+//     NSArray<NSOperation*>* ops = @[
+//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
+//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
+//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)]
+//     ];
+//     AddOperationsThread* nonWaitThread = [AddOperationsThread threadWithQueue:queue operations:ops wait:NO];
+//     [nonWaitThread start];
+
+//     // Should be 0 ops finished even if the thread completed
+//     [nonWaitThread.finishedCondition lock];
+//     while (!nonWaitThread.finished) {
+//         [nonWaitThread.finishedCondition wait];
+//     }
+//     [nonWaitThread.finishedCondition unlock];
+//     ASSERT_EQ(0, opsFinished);
+
+//     // Test addOperations with waitUntilFinished:YES, using a separate start condition
+//     __block NSCondition* startOpCondition2 = [[NSCondition new] autorelease];
+//     void (^incrementOpsFinished2)() = ^void() {
+//         [startOpCondition2 lock];
+//         [startOpCondition2 wait];
+//         ++opsFinished;
+//         [startOpCondition2 unlock];
+//     };
+//     NSArray<NSOperation*>* ops2 = @[
+//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
+//         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)]
+//     ];
+
+//     AddOperationsThread* waitThread = [AddOperationsThread threadWithQueue:queue operations:ops2 wait:YES];
+//     [waitThread start];
+
+//     // Thread should be hung and no operations should have finished
+//     [waitThread.startedCondition lock];
+//     while (!waitThread.executing) {
+//         [waitThread.startedCondition wait];
+//     }
+//     [waitThread.startedCondition unlock];
+//     ASSERT_EQ(0, opsFinished);
+
+//     // Allow ops2 to to run, then wait until the thread is finished
+//     [startOpCondition2 broadcast];
+//     [waitThread.finishedCondition lock];
+//     [waitThread.finishedCondition wait];
+//     [waitThread.finishedCondition unlock];
+
+//     ASSERT_EQ(5, [queue maxConcurrentOperationCount]);
+//     // Both operations in ops2 should have finished, but none in ops
+//     // [startOpCondition broadcast]; // Prior ops block execution here :(
+//     // ASSERT_EQ(2, opsFinished);
+
+//     // All operations should be finished soon after the condition is broadcast
+//     EXPECT_EQ(5, opsFinished);
+// }
+
+@interface BlockThread : NSThread
+- (instancetype)initWithBlock:(void (^)())block;
+@property (copy) void (^block)();
 @end
 
-@implementation AddOperationsThread
-+ (instancetype)threadWithQueue:(NSOperationQueue*)queue operations:(NSArray<NSOperation*>*)ops wait:(BOOL)wait {
-    AddOperationsThread* ret = [[self new] autorelease];
-    ret.queue = queue;
-    ret.ops = ops;
-    ret.wait = wait;
-    return ret;
+@implementation BlockThread
+- (instancetype)initWithBlock:(void (^)())block {
+    if (self = [super init]) {
+        self.block = block;
+    }
+    return self;
 }
 
 - (void)main {
-    [_startedCondition broadcast];
-    [_queue addOperations:_ops waitUntilFinished:_wait];
-    [_finishedCondition broadcast];
+    self.block();
 }
 @end
 
 TEST(NSOperation, AddOperations) {
-    NSCondition* startOpCondition = [[NSCondition new] autorelease];
+    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+    [queue setMaxConcurrentOperationCount:5];
+
     __block size_t opsFinished = 0;
+    __block NSConditionLock* startLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
     void (^incrementOpsFinished)() = ^void() {
-        [startOpCondition lock];
-        [startOpCondition wait];
+        ASSERT_TRUE_MSG([startLock lockWhenCondition:YES beforeDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                        "Operation was not allowed to start in time.");
         ++opsFinished;
-        [startOpCondition unlock];
+        [startLock unlock];
     };
 
-    NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
-
-    // Test addOperations with waitUntilFinished:NO
-    NSArray<NSOperation*>* ops = @[
+    __block NSArray<NSOperation*>* ops = @[
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)]
     ];
-    AddOperationsThread* nonWaitThread = [AddOperationsThread threadWithQueue:queue operations:ops wait:NO];
-    [nonWaitThread start];
 
-    // Should be 0 ops finished even if the thread completed
-    [nonWaitThread.finishedCondition lock];
-    while (!nonWaitThread.finished) {
-        [nonWaitThread.finishedCondition wait];
+    NSThread* addOperationsThread = [[[BlockThread alloc] initWithBlock:^void() {
+        [queue addOperations:ops waitUntilFinished:YES];
+    }] autorelease];
+    [addOperationsThread start];
+    // [NSThread sleepForTimeInterval:1];
+    while (queue.operationCount < 3) {
     }
-    [nonWaitThread.finishedCondition unlock];
+    ASSERT_OBJCEQ(ops, [queue operations]);
+    ASSERT_EQ([ops count], [queue operationCount]);
+    ASSERT_TRUE([addOperationsThread isExecuting]);
+    ASSERT_FALSE([addOperationsThread isFinished]);
     ASSERT_EQ(0, opsFinished);
 
-    // Test addOperations with waitUntilFinished:YES, using a separate start condition
-    NSCondition* startOpCondition2 = [[NSCondition new] autorelease];
+    __block NSConditionLock* startLock2 = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
     void (^incrementOpsFinished2)() = ^void() {
-        [startOpCondition2 lock];
-        [startOpCondition2 wait];
+        ASSERT_TRUE_MSG([startLock2 lockWhenCondition:YES beforeDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                        "Operation was not allowed to start in time.");
         ++opsFinished;
-        [startOpCondition2 unlock];
+        [startLock2 unlock];
     };
+
     NSArray<NSOperation*>* ops2 = @[
         [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)]
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
     ];
-
-    AddOperationsThread* waitThread = [AddOperationsThread threadWithQueue:queue operations:ops2 wait:YES];
-    [waitThread start];
-
-    // Thread should be hung and no operations should have finished
-    [waitThread.startedCondition lock];
-    while (!waitThread.executing) {
-        [waitThread.startedCondition wait];
-    }
-    [waitThread.startedCondition unlock];
+    [queue addOperations:ops waitUntilFinished:NO];
+    ASSERT_EQ(5, [queue operationCount]);
     ASSERT_EQ(0, opsFinished);
 
-    // Allow ops2 to to run, then wait until the thread is finished
-    [startOpCondition2 broadcast];
-    [waitThread.finishedCondition lock];
-    [waitThread.finishedCondition wait];
-    [waitThread.finishedCondition unlock];
-    // Both operations in ops2 should have finished, but none in ops
-    [startOpCondition broadcast]; // Prior ops block execution here :(
-    // ASSERT_EQ(2, opsFinished);
+    ASSERT_TRUE_MSG([startLock tryLock], "Failed to start operations.");
+    [startLock unlockWithCondition:YES];
 
-    // All operations should be finished soon after the condition is broadcast
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
-    EXPECT_EQ(5, opsFinished);
+    for (NSOperation* op in ops) {
+        [op waitUntilFinished];
+    }
+    while (![addOperationsThread isFinished]) {
+    }
+    ASSERT_EQ(3, opsFinished);
+
+    ASSERT_TRUE_MSG([startLock2 tryLock], "Failed to start operations.");
+    [startLock2 unlockWithCondition:YES];
+
+    for (NSOperation* op in ops2) {
+        [op waitUntilFinished];
+    }
+    ASSERT_EQ(5, opsFinished);
+}
+
+TEST(NSOperation, AddOperation_AndValidateState) {
+    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+    [queue setSuspended:YES];
+
+    __block NSConditionLock* startedOperationLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
+    __block NSConditionLock* finishOperationLock = [[[NSConditionLock alloc] initWithCondition:NO] autorelease];
+    NSOperation* operation = [NSBlockOperation blockOperationWithBlock:^void() {
+        if ([startedOperationLock tryLock]) {
+            [startedOperationLock unlockWithCondition:YES];
+        }
+
+        [finishOperationLock lockWhenCondition:YES];
+        [finishOperationLock unlock];
+    }];
+
+    // Validate the initial state of the queue and operation
+    ASSERT_EQ(0, queue.operationCount);
+    ASSERT_OBJCEQ(@[], queue.operations);
+    ASSERT_FALSE(operation.isExecuting);
+    ASSERT_FALSE(operation.isFinished);
+
+    // Add the operation to the queue. The operations/count should reflect the add, but the operation should not have started.
+    [queue addOperation:operation];
+    ASSERT_EQ(1, queue.operationCount);
+    ASSERT_OBJCEQ(@[ operation ], queue.operations);
+    ASSERT_FALSE(operation.isExecuting);
+    ASSERT_FALSE(operation.isFinished);
+
+    // Unsuspend the queue. The operation should start shortly.
+    [queue setSuspended:NO];
+    [startedOperationLock lockWhenCondition:YES];
+    [startedOperationLock unlock];
+    ASSERT_EQ(1, queue.operationCount);
+    ASSERT_OBJCEQ(@[ operation ], queue.operations);
+    ASSERT_TRUE(operation.isExecuting);
+    ASSERT_FALSE(operation.isFinished);
+
+    // Allow the operation to run. The operation should finish shortly.
+    ASSERT_TRUE_MSG([finishOperationLock tryLock], "Failed to allow operation to finish.");
+    [finishOperationLock unlockWithCondition:YES];
+    [queue waitUntilAllOperationsAreFinished];
+    ASSERT_EQ(0, queue.operationCount);
+    ASSERT_OBJCEQ(@[], queue.operations);
+    ASSERT_FALSE(operation.isExecuting);
+    ASSERT_TRUE(operation.isFinished);
 }
 
 TEST(NSOperation, AddOperationWithBlock) {
