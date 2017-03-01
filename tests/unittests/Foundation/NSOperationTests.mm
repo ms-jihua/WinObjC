@@ -712,80 +712,6 @@ TEST(NSOperation, CurrentQueue) {
 }
 @end
 
-TEST(NSOperation, AddOperations) {
-    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
-    [queue setMaxConcurrentOperationCount:5];
-
-    __block size_t opsFinished = 0;
-    __block _NSBooleanCondition* startLock = [[_NSBooleanCondition new] autorelease];
-    void (^incrementOpsFinished)() = ^void() {
-        ASSERT_TRUE_MSG([startLock waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation was not allowed to start in time.");
-        ++opsFinished;
-    };
-
-    __block NSArray<NSOperation*>* ops = @[
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)]
-    ];
-
-    NSThread* addOperationsThread = [[[BlockThread alloc] initWithBlock:^void() {
-        [queue addOperations:ops waitUntilFinished:YES];
-    }] autorelease];
-    [addOperationsThread start];
-
-    // TODO: Do this better
-    while (queue.operationCount < 3) {
-    }
-
-    ASSERT_OBJCEQ(ops, [queue operations]);
-    ASSERT_EQ([ops count], [queue operationCount]);
-    ASSERT_TRUE([addOperationsThread isExecuting]);
-    ASSERT_FALSE([addOperationsThread isFinished]);
-    ASSERT_EQ(0, opsFinished);
-
-    __block _NSBooleanCondition* startLock2 = [[_NSBooleanCondition new] autorelease];
-    void (^incrementOpsFinished2)() = ^void() {
-        ASSERT_TRUE_MSG([startLock2 waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation was not allowed to start in time.");
-        ++opsFinished;
-    };
-
-    __block NSArray<NSOperation*>* ops2 = @[
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
-        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
-    ];
-    NSThread* addOperationsThread2 = [[[BlockThread alloc] initWithBlock:^void() {
-        [queue addOperations:ops2 waitUntilFinished:NO];
-    }] autorelease];
-    [addOperationsThread2 start];
-
-    // TODO: Do this better
-    while (queue.operationCount < 5) {
-    }
-
-    ASSERT_EQ(5, [queue operationCount]);
-    ASSERT_EQ(0, opsFinished);
-
-    [startLock broadcast];
-
-    for (NSOperation* op in ops) {
-        [op waitUntilFinished];
-    }
-
-    // TODO: Do this better
-    while (![addOperationsThread isFinished]) {
-    }
-
-    ASSERT_EQ(3, opsFinished);
-
-    [startLock2 broadcast];
-
-    for (NSOperation* op in ops2) {
-        [op waitUntilFinished];
-    }
-    ASSERT_EQ(5, opsFinished);
-}
-
 TEST(NSOperation, AddOperation_AndValidateState) {
     __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
     [queue setSuspended:YES];
@@ -836,4 +762,150 @@ TEST(NSOperation, AddOperationWithBlock) {
     }];
     [queue waitUntilAllOperationsAreFinished];
     ASSERT_TRUE(flag);
+}
+
+TEST(NSOperation, AddOperations) {
+    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+
+    __block size_t opsFinished = 0;
+    __block _NSBooleanCondition* startCondition = [[_NSBooleanCondition new] autorelease];
+    void (^incrementOpsFinished)() = ^void() {
+        ASSERT_TRUE_MSG([startCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                        "Operation was not allowed to start in time.");
+        ++opsFinished;
+    };
+
+    __block NSArray<NSOperation*>* ops = @[
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished)]
+    ];
+
+    NSThread* addOperationsThread = [[[BlockThread alloc] initWithBlock:^void() {
+        [queue addOperations:ops waitUntilFinished:YES];
+    }] autorelease];
+    [addOperationsThread start];
+
+    // TODO: Do this better
+    while (queue.operationCount < 3) {
+    }
+
+    ASSERT_OBJCEQ(ops, [queue operations]);
+    ASSERT_EQ([ops count], [queue operationCount]);
+    ASSERT_TRUE([addOperationsThread isExecuting]);
+    ASSERT_FALSE([addOperationsThread isFinished]);
+    ASSERT_EQ(0, opsFinished);
+
+    __block _NSBooleanCondition* startCondition2 = [[_NSBooleanCondition new] autorelease];
+    void (^incrementOpsFinished2)() = ^void() {
+        ASSERT_TRUE_MSG([startCondition2 waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                        "Operation was not allowed to start in time.");
+        ++opsFinished;
+    };
+
+    __block NSArray<NSOperation*>* ops2 = @[
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(incrementOpsFinished2)],
+    ];
+    NSThread* addOperationsThread2 = [[[BlockThread alloc] initWithBlock:^void() {
+        [queue addOperations:ops2 waitUntilFinished:NO];
+    }] autorelease];
+    [addOperationsThread2 start];
+
+    // TODO: Do this better
+    while (queue.operationCount < 5) {
+    }
+
+    ASSERT_EQ(5, [queue operationCount]);
+    ASSERT_EQ(0, opsFinished);
+
+    [startCondition broadcast];
+
+    for (NSOperation* op in ops) {
+        [op waitUntilFinished];
+    }
+
+    // TODO: Do this better
+    while (![addOperationsThread isFinished]) {
+    }
+
+    ASSERT_EQ(3, opsFinished);
+
+    [startCondition2 broadcast];
+
+    for (NSOperation* op in ops2) {
+        [op waitUntilFinished];
+    }
+    ASSERT_EQ(5, opsFinished);
+}
+
+TEST(NSOperation, CancelAllOperations) {
+}
+
+TEST(NSOperation, WaitUntilAllOperationsAreFinished) {
+    __block NSOperationQueue* queue = [[NSOperationQueue new] autorelease];
+
+    __block _NSBooleanCondition* startCondition = [[_NSBooleanCondition new] autorelease];
+    void (^waitForStartCondition)() = ^void() {
+        ASSERT_TRUE_MSG([startCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operation did not start in time.");
+    };
+
+    __block NSArray<NSOperation*>* ops = @[
+        [NSBlockOperation blockOperationWithBlock:Block_copy(waitForStartCondition)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(waitForStartCondition)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(waitForStartCondition)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(waitForStartCondition)],
+        [NSBlockOperation blockOperationWithBlock:Block_copy(waitForStartCondition)]
+    ];
+
+    // On a separate thread, add a bunch of operations, then wait until they're all finished
+    __block _NSBooleanCondition* addedOperationsCondition = [[_NSBooleanCondition new] autorelease];
+    __block _NSBooleanCondition* finishedWaitingCondition = [[_NSBooleanCondition new] autorelease];
+
+    NSThread* addOperationsAndWaitThread = [[[BlockThread alloc] initWithBlock:^void() {
+        [queue addOperations:ops waitUntilFinished:NO];
+        [addedOperationsCondition broadcast];
+        [queue waitUntilAllOperationsAreFinished];
+        [finishedWaitingCondition broadcast];
+    }] autorelease];
+    [addOperationsAndWaitThread start];
+    ASSERT_TRUE_MSG([addedOperationsCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]], "Operations were not added in time.");
+
+    // Validate that at least one operation is currently running, with a little bit of leeway for time.
+    bool atLeastOneOperationRunning = false;
+    size_t numTries = 0;
+    while ((!atLeastOneOperationRunning) && (numTries < 2)) {
+        for (NSOperation* op in ops) {
+            if (op.isExecuting && !op.isFinished) {
+                atLeastOneOperationRunning = true;
+                break;
+            }
+        }
+
+        if (!atLeastOneOperationRunning) {
+            ++numTries;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    ASSERT_TRUE(atLeastOneOperationRunning);
+
+    // Validate the current state
+    ASSERT_TRUE(addOperationsAndWaitThread.isExecuting);
+    ASSERT_FALSE(addOperationsAndWaitThread.isFinished);
+
+    // Allow the operations to run
+    [startCondition broadcast];
+
+    // waitUntilAllOperationsAreFinished should stop blocking not long after
+    ASSERT_TRUE_MSG([finishedWaitingCondition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]],
+                    "waitUntilAllOperationsAreFinished did not unblock in time.");
+    for (NSOperation* op in ops) {
+        ASSERT_FALSE(op.isExecuting);
+        ASSERT_TRUE(op.isFinished);
+    }
+}
+
+TEST(NSOperation, AssertSanity) {
+    ASSERT_TRUE_MSG(true, "This message should not print");
+    ASSERT_TRUE(false);
 }
