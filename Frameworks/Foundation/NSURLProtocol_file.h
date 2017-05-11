@@ -21,7 +21,6 @@
 - (id)startLoading;
 - (id)stopLoading;
 - (id)statusVersion:(id)versionStr;
-- (id)scheduleInRunLoop:(id)runLoop forMode:(id)mode;
 - (id)_doFileLoad;
 + (BOOL)canInitWithRequest:(id)request;
 @end

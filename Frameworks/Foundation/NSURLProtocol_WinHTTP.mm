@@ -211,6 +211,8 @@ static ComPtr<IHttpRequestMessage> _requestMessageForNS(NSURLRequest* nsRequest)
 @interface NSURLProtocol_WinHTTP : NSURLProtocol {
     ComPtr<AsyncHttpOperation> _httpRequestOperation;
     ComPtr<IHttpClient> _httpClient;
+    StrongId<NSOperationQueue> _clientQueue;
+    StrongId<NSThread> _clientThread;
 }
 @property (assign, atomic) bool cancelled;
 @end
@@ -243,13 +245,31 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
     };
 }
 
+static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^callbackBlock)()) {
+    if (protocol->_clientQueue) {
+        [protocol->_clientQueue addOperationWithBlock:callbackBlock];
+    } else if (protocol->_clientThread) {
+        [protocol performSelector:@selector(_invokeBlock:) onThread:protocol->_clientThread withObject:callbackBlock waitUntilDone:NO];
+    } else {
+        callbackBlock();
+    }
+}
+
+- (void)_invokeBlock:(void (^)())block {
+    block();
+}
+
 - (void)startLoading {
     @synchronized(self) {
         if (_httpRequestOperation) {
             return;
         }
 
+        _clientQueue = [NSOperationQueue currentQueue];
+        _clientThread = [NSThread currentThread];
+
         NSError* error = nil;
+
         try {
             auto httpRequestMessage = _requestMessageForNS(self.request);
             THROW_IF_FAILED(_httpClient->SendRequestWithOptionAsync(httpRequestMessage.Get(),
@@ -264,7 +284,10 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
         CATCH_POPULATE_NSERROR(&error);
 
         if (error) {
-            [self _propagateErrorToClient:error];
+            __block StrongId<NSError> strongError = error;
+            __dispatchClientCallback(self, ^void() {
+                [self.client URLProtocol:self didFailWithError:strongError];
+            });
         }
     }
 }
@@ -295,7 +318,7 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
             return S_OK;
         }
 
-        NSError* error = nil;
+        __block NSError* error = nil;
         try {
             ComPtr<AsyncHttpOperation> operation(pOperation);
             ComPtr<IAsyncInfo> asyncInfo;
@@ -395,10 +418,10 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
                 default:
                     httpVersionStr = nil;
             }
-            NSHTTPURLResponse* nsResponse = [[[NSHTTPURLResponse alloc] initWithURL:[request URL]
-                                                                         statusCode:statusCode
-                                                                        HTTPVersion:httpVersionStr
-                                                                       headerFields:nsHeaders] autorelease];
+            __block StrongId<NSHTTPURLResponse> nsResponse = [[[NSHTTPURLResponse alloc] initWithURL:[request URL]
+                                                                                          statusCode:statusCode
+                                                                                         HTTPVersion:httpVersionStr
+                                                                                        headerFields:nsHeaders] autorelease];
 
             if (statusCode >= 300 && statusCode <= 399) { // redirect code
                 ComPtr<IUriRuntimeClass> uri;
@@ -412,12 +435,17 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
 
                 // The location header can specify a relative or absolute URL: attempt to join it with the request URL.
                 NSURL* targetUrl = [NSURL URLWithString:Strings::WideToNSString(uriString.Get()) relativeToURL:[request URL]];
-                NSURLRequest* req = [NSURLRequest requestWithURL:targetUrl];
-                [self.client URLProtocol:self wasRedirectedToRequest:req redirectResponse:nsResponse];
+                __block StrongId<NSURLRequest> req = [NSURLRequest requestWithURL:targetUrl];
+
+                __dispatchClientCallback(self, ^void() {
+                    [self.client URLProtocol:self wasRedirectedToRequest:req redirectResponse:nsResponse];
+                });
                 // After a redirect, NSURLProtocol ceases to exist: we could redirect to a completely different one.
                 return S_OK;
             } else {
-                [self.client URLProtocol:self didReceiveResponse:nsResponse cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+                __dispatchClientCallback(self, ^void() {
+                    [self.client URLProtocol:self didReceiveResponse:nsResponse cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+                });
             }
 
             if (content) {
@@ -433,25 +461,28 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
         CATCH_POPULATE_NSERROR(&error);
 
         if (error) {
-            [self _propagateErrorToClient:error];
+            __block StrongId<NSError> strongError = error;
+            __dispatchClientCallback(self, ^void() {
+                [self.client URLProtocol:self didFailWithError:strongError];
+            });
         }
 
         return S_OK;
     }
 }
 
-- (void)_propagateErrorToClient:(NSError*)error {
-    [self.client URLProtocol:self didFailWithError:error];
-}
+// - (void)_propagateErrorToClient:(NSError*)error {
+//     [self.client URLProtocol:self didFailWithError:error];
+// }
 
-- (void)_didFinishLoading {
-    [self.client URLProtocolDidFinishLoading:self];
-}
+// - (void)_didFinishLoading {
+//     [self.client URLProtocolDidFinishLoading:self];
+// }
 
 - (void)_consumeDataStreamForIHttpContent:(IHttpContent*)pHttpContent {
     ComPtr<IHttpContent> httpContent(pHttpContent);
     id strongSelf = self;
-    NSError* error = nil;
+    __block NSError* error = nil;
     try {
         ComPtr<IInputStream> stream;
         WRLHelpers::AwaitProgressCompleteHelper<IInputStream*, uint64_t>(
@@ -495,15 +526,23 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
             // We're opting to take a copy of the buffer here, as NSURLProtocol's consumer can legally expect the data
             // to remain valid long after the connection is gone. Eventually, it would be very nice to have an IBuffer-backed
             // NSData.
-            [self.client URLProtocol:strongSelf didLoadData:[NSData dataWithBytes:pOutputBuffer length:length]];
+            __block StrongId<NSData> data = [NSData dataWithBytes:pOutputBuffer length:length];
+            __dispatchClientCallback(self, ^void() {
+                [self.client URLProtocol:self didLoadData:data];
+            });
         }
 
-        [strongSelf _didFinishLoading];
+        __dispatchClientCallback(self, ^void() {
+            [self.client URLProtocolDidFinishLoading:strongSelf];
+        });
     }
     CATCH_POPULATE_NSERROR(&error);
 
     if (error) {
-        [strongSelf _propagateErrorToClient:error];
+        __block StrongId<NSError> strongError = error;
+        __dispatchClientCallback(self, ^void() {
+            [self.client URLProtocol:self didFailWithError:strongError];
+        });
     }
 }
 @end
