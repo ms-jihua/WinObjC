@@ -23,6 +23,5 @@
 - (id)statusVersion:(id)versionStr;
 - (id)scheduleInRunLoop:(id)runLoop forMode:(id)mode;
 - (id)_doFileLoad;
-- (id)unscheduleFromRunLoop:(id)runLoop forMode:(id)mode;
 + (BOOL)canInitWithRequest:(id)request;
 @end
