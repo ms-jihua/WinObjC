@@ -245,16 +245,19 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
     };
 }
 
+// Helper function that executes a block on the client thread - used for client callbacks
 static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^callbackBlock)()) {
-    if (protocol->_clientQueue) {
-        [protocol->_clientQueue addOperationWithBlock:callbackBlock];
-    } else if (protocol->_clientThread) {
+    // if (protocol->_clientQueue) {
+    //     [protocol->_clientQueue addOperationWithBlock:callbackBlock];
+    // } else
+    if (protocol->_clientThread) {
         [protocol performSelector:@selector(_invokeBlock:) onThread:protocol->_clientThread withObject:callbackBlock waitUntilDone:NO];
     } else {
         callbackBlock();
     }
 }
 
+// Helper function that just invokes a block
 - (void)_invokeBlock:(void (^)())block {
     block();
 }
@@ -275,8 +278,6 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             THROW_IF_FAILED(_httpClient->SendRequestWithOptionAsync(httpRequestMessage.Get(),
                                                                     HttpCompletionOption::HttpCompletionOption_ResponseHeadersRead,
                                                                     &_httpRequestOperation));
-
-            StrongId<NSURLProtocol_WinHTTP> strongSelf(self);
             auto handler = MakeHttpCompletedCallback(
                 bindObjC<HRESULT, AsyncHttpOperation*, AsyncStatus>(self, @selector(_asyncHttpOperation:completedWithStatus:)));
             THROW_IF_FAILED(_httpRequestOperation->put_Completed(handler.Get()));
@@ -284,10 +285,7 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
         CATCH_POPULATE_NSERROR(&error);
 
         if (error) {
-            __block StrongId<NSError> strongError = error;
-            __dispatchClientCallback(self, ^void() {
-                [self.client URLProtocol:self didFailWithError:strongError];
-            });
+            [self _propagateErrorToClient:error];
         }
     }
 }
@@ -318,7 +316,7 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             return S_OK;
         }
 
-        __block NSError* error = nil;
+        NSError* error = nil;
         try {
             ComPtr<AsyncHttpOperation> operation(pOperation);
             ComPtr<IAsyncInfo> asyncInfo;
@@ -449,10 +447,10 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             }
 
             if (content) {
-                [self retain]; // we could be cancelled mid-operation, but we need to retain the ability to clean up.
+                // we could be cancelled mid-operation, but we need to retain the ability to clean up.
+                __block StrongId<NSURLProtocol_WinHTTP> strongSelf = self;
                 dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                    [self _consumeDataStreamForIHttpContent:content.Get()];
-                    [self release];
+                    [strongSelf _consumeDataStreamForIHttpContent:content.Get()];
                 });
             }
 
@@ -461,28 +459,24 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
         CATCH_POPULATE_NSERROR(&error);
 
         if (error) {
-            __block StrongId<NSError> strongError = error;
-            __dispatchClientCallback(self, ^void() {
-                [self.client URLProtocol:self didFailWithError:strongError];
-            });
+            [self _propagateErrorToClient:error];
         }
 
         return S_OK;
     }
 }
 
-// - (void)_propagateErrorToClient:(NSError*)error {
-//     [self.client URLProtocol:self didFailWithError:error];
-// }
-
-// - (void)_didFinishLoading {
-//     [self.client URLProtocolDidFinishLoading:self];
-// }
+- (void)_propagateErrorToClient:(NSError*)error {
+    __block StrongId<NSError> strongError = error;
+    __dispatchClientCallback(self, ^void() {
+        [self.client URLProtocol:self didFailWithError:strongError];
+    });
+}
 
 - (void)_consumeDataStreamForIHttpContent:(IHttpContent*)pHttpContent {
     ComPtr<IHttpContent> httpContent(pHttpContent);
-    id strongSelf = self;
-    __block NSError* error = nil;
+    __block StrongId<NSURLProtocol_WinHTTP> strongSelf = self;
+    NSError* error = nil;
     try {
         ComPtr<IInputStream> stream;
         WRLHelpers::AwaitProgressCompleteHelper<IInputStream*, uint64_t>(
@@ -528,7 +522,7 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             // NSData.
             __block StrongId<NSData> data = [NSData dataWithBytes:pOutputBuffer length:length];
             __dispatchClientCallback(self, ^void() {
-                [self.client URLProtocol:self didLoadData:data];
+                [self.client URLProtocol:strongSelf didLoadData:data];
             });
         }
 
@@ -539,10 +533,7 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
     CATCH_POPULATE_NSERROR(&error);
 
     if (error) {
-        __block StrongId<NSError> strongError = error;
-        __dispatchClientCallback(self, ^void() {
-            [self.client URLProtocol:self didFailWithError:strongError];
-        });
+        [strongSelf _propagateErrorToClient:error];
     }
 }
 @end

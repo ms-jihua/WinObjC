@@ -1456,3 +1456,63 @@ TEST(NSOperation, OrderOfOperations_DifferentPriority) {
     NSArray* expected = @[ @3, @4, @0, @1, @2, @5 ];
     ASSERT_OBJCEQ(expected, array);
 }
+
+// @interface LogProtocolClient : NSObject <NSURLProtocolClient>
+// @end
+
+// @implementation LogProtocolClient
+// - (void)URLProtocol:(NSURLProtocol*)protocol cachedResponseIsValid:(NSCachedURLResponse*)cachedResponse {
+//     NSLog(@"cachedResponseIsValid");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol didCancelAuthenticationChallenge:(NSURLAuthenticationChallenge*)challenge {
+//     NSLog(@"didCancelAuthenticationChallenge");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol didFailWithError:(NSError*)error {
+//     NSLog(@"didFailWithError");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol didLoadData:(NSData*)data {
+//     NSLog(@"didLoadData");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge*)challenge {
+//     NSLog(@"didReceiveAuthenticationChallenge");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol
+//     didReceiveResponse:(NSURLResponse*)response
+//     cacheStoragePolicy:(NSURLCacheStoragePolicy)policy {
+//     NSLog(@"didReceiveResponse");
+// }
+
+// - (void)URLProtocol:(NSURLProtocol*)protocol
+//     wasRedirectedToRequest:(NSURLRequest*)request
+//           redirectResponse:(NSURLResponse*)redirectResponse {
+//     NSLog(@"wasRedirectedToRequest");
+// }
+
+// - (void)URLProtocolDidFinishLoading:(NSURLProtocol*)protocol {
+//     NSLog(@"didFinishLoading");
+// }
+
+// @end
+
+// TEST(Experimental, NSURLProtocol) {
+//     NSURL* url = [NSURL URLWithString:@"https://httpbin.org/cookies/set?winobjc=awesome"];
+//     NSURLRequest* request = [NSURLRequest requestWithURL:url];
+//     NSURLProtocol* protocol =
+//         [[[NSURLProtocol alloc] initWithRequest:request cachedResponse:nil client:[[[LogProtocolClient alloc] init] autorelease]]
+//             autorelease];
+
+//     // [protocol startLoading]; // crashes
+
+//     // NSThread* thread = [[[NSThread alloc] initWithTarget:protocol selector:@selector(startLoading) object:nil] autorelease];
+//     // [thread start];
+
+//     // while (!thread.finished) {
+//     // }
+
+//     // abstract class alloc darn
+// }
