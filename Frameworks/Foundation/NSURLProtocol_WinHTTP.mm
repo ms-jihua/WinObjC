@@ -211,7 +211,6 @@ static ComPtr<IHttpRequestMessage> _requestMessageForNS(NSURLRequest* nsRequest)
 @interface NSURLProtocol_WinHTTP : NSURLProtocol {
     ComPtr<AsyncHttpOperation> _httpRequestOperation;
     ComPtr<IHttpClient> _httpClient;
-    StrongId<NSOperationQueue> _clientQueue;
     StrongId<NSThread> _clientThread;
 }
 @property (assign, atomic) bool cancelled;
@@ -247,9 +246,6 @@ static std::function<R(Args...)> bindObjC(id instance, SEL _cmd) {
 
 // Helper function that executes a block on the client thread - used for client callbacks
 static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^callbackBlock)()) {
-    // if (protocol->_clientQueue) {
-    //     [protocol->_clientQueue addOperationWithBlock:callbackBlock];
-    // } else
     if (protocol->_clientThread) {
         [protocol performSelector:@selector(_invokeBlock:) onThread:protocol->_clientThread withObject:callbackBlock waitUntilDone:NO];
     } else {
@@ -268,7 +264,6 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             return;
         }
 
-        _clientQueue = [NSOperationQueue currentQueue];
         _clientThread = [NSThread currentThread];
 
         NSError* error = nil;

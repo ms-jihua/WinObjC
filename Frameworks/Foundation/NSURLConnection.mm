@@ -133,22 +133,6 @@ static void __dispatchDelegateCallback(NSURLConnection* connection, void (^callb
                                   modes:@[ pair.second.get() ]];
         }
     }
-    // else {
-    //     // Run on the current run loop in the default mode
-    //     [[NSRunLoop currentRunLoop] performSelector:@selector(_invokeBlock:)
-    //                                          target:connection
-    //                                        argument:callbackBlock
-    //                                           order:0
-    //                                           modes:@[ NSDefaultRunLoopMode ]];
-    // }
-    // if (protocol->_clientQueue) {
-    //     [protocol->_clientQueue addOperationWithBlock:callbackBlock];
-    // } else
-    // if (protocol->_clientThread) {
-    //     [protocol performSelector:@selector(_invokeBlock:) onThread:protocol->_clientThread withObject:callbackBlock waitUntilDone:NO];
-    // } else {
-    //     callbackBlock();
-    // }
 }
 
 // Helper function that just invokes a block
@@ -303,35 +287,11 @@ static void __dispatchDelegateCallback(NSURLConnection* connection, void (^callb
             return;
         }
         _protocol = protocol;
-        // [_protocol startLoading];
 
         _protocolThread.attach([[NSThread alloc] initWithTarget:self selector:@selector(_protocolThreadBody) object:nil]);
         [_protocolThread start];
 
         [_protocol performSelector:@selector(startLoading) onThread:_protocolThread withObject:nil waitUntilDone:NO];
-
-        // NSThread* loadThread = [[[NSThread alloc] initWithTarget:_protocol selector:@selector(startLoading) object:nil] autorelease];
-        // [loadThread start];
-
-        // if (_delegateQueue) {
-        //     [_delegateQueue addOperationWithBlock:^void() {
-        //         [_protocol startLoading];
-        //     }];
-
-        // } else if (_scheduledRunLoops.size() == 1) {
-        //     // TODO #2469: Cannot currently schedule on more than one runloop
-        //     for (auto pair : _scheduledRunLoops) {
-        //         [pair.first performSelector:@selector(startLoading) target:_protocol argument:nil order:0 modes:@[ pair.second.get() ]];
-        //     }
-
-        // } else {
-        //     // Run on the current run loop in the default mode
-        //     [[NSRunLoop currentRunLoop] performSelector:@selector(startLoading)
-        //                                          target:_protocol
-        //                                        argument:nil
-        //                                           order:0
-        //                                           modes:@[ NSDefaultRunLoopMode ]];
-        // }
     }
 }
 
