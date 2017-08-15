@@ -288,13 +288,15 @@ static void __dispatchClientCallback(NSURLProtocol_WinHTTP* protocol, void (^cal
             // TODO #2721: If this properly supports streaming bodies instead of flattening the data up front,
             // more accurate callbacks can be done
             NSInteger contentSize = self.request.HTTPBody ? self.request.HTTPBody.length : _flattenedBodyStream.size();
-            if (([self.client respondsToSelector:@selector(URLProtocol:didWriteData:totalBytesWritten:totalBytesExpectedToWrite:)]) &&
-                (contentSize > 0)) {
+            if (contentSize > 0) {
                 __dispatchClientCallback(self, ^void() {
-                    [self.client URLProtocol:self
-                                     didWriteData:contentSize
-                                totalBytesWritten:contentSize
-                        totalBytesExpectedToWrite:contentSize];
+                    id<NSURLProtocolClient> client = self.client;
+                    if ([client respondsToSelector:@selector(URLProtocol:didWriteData:totalBytesWritten:totalBytesExpectedToWrite:)]) {
+                        [client URLProtocol:self
+                                         didWriteData:contentSize
+                                    totalBytesWritten:contentSize
+                            totalBytesExpectedToWrite:contentSize];
+                    }
                 });
             }
 

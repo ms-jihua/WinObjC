@@ -107,7 +107,7 @@ static const int s_InvalidButtonIndex = -1;
     // Only used to update _isContentDialogVisible - if we move to XAML Popup, we might be able to leverage isOpen property instead
     __weak UIActionSheet* weakSelf = self;
     _contentDialogOpenedEventToken = _contentDialog.Opened(
-        objcwinrt::callback([weakSelf] (const Controls::ContentDialog&, const Controls::ContentDialogOpenedEventArgs&) {
+        objcwinrt::callback([weakSelf](const Controls::ContentDialog&, const Controls::ContentDialogOpenedEventArgs&) {
             __strong UIActionSheet* strongSelf = weakSelf;
 
             if (strongSelf != nil) {
@@ -121,7 +121,7 @@ static const int s_InvalidButtonIndex = -1;
 
     // Block the closing of the dialog via ESC if _cancelButtonIndex is invalid
     _contentDialogClosingEventToken = _contentDialog.Closing(
-        objcwinrt::callback([weakSelf] (const Controls::ContentDialog&, const Controls::ContentDialogClosingEventArgs& e) {
+        objcwinrt::callback([weakSelf](const Controls::ContentDialog&, const Controls::ContentDialogClosingEventArgs& e) {
             __strong UIActionSheet* strongSelf = weakSelf;
 
             if (strongSelf != nil) {
@@ -136,7 +136,7 @@ static const int s_InvalidButtonIndex = -1;
 
     // Only used to update _isContentDialogVisible - if we move to XAML Popup, we might be able to leverage isOpen property instead
     _contentDialogClosedEventToken = _contentDialog.Closed(
-        objcwinrt::callback([weakSelf] (const Controls::ContentDialog&, const Controls::ContentDialogClosedEventArgs&) {
+        objcwinrt::callback([weakSelf](const Controls::ContentDialog&, const Controls::ContentDialogClosedEventArgs&) {
             __strong UIActionSheet* strongSelf = weakSelf;
 
             if (strongSelf != nil) {
@@ -207,14 +207,11 @@ static const int s_InvalidButtonIndex = -1;
 }
 
 - (void)dealloc {
-    _delegate = nil;
-
     _contentDialog.Opened(_contentDialogOpenedEventToken);
     _contentDialog.Closing(_contentDialogClosingEventToken);
     _contentDialog.Closed(_contentDialogClosedEventToken);
 
     _contentDialog.Hide();
-    _contentDialog = nullptr;
 }
 
 /**
@@ -253,20 +250,21 @@ static const int s_InvalidButtonIndex = -1;
     // Display the ContentDialog and ultimately capture its dismissal event
     WF::IAsyncOperation<Controls::ContentDialogResult> async = _contentDialog.ShowAsync();
 
-    async.Completed(objcwinrt::callback([self] (const WF::IAsyncOperation<Controls::ContentDialogResult>& operation, WF::AsyncStatus status) {
-        if (status == WF::AsyncStatus::Completed) {
-            int pressedIndex = XamlControls::XamlContentDialogPressedIndex(_contentDialog);
-            if (pressedIndex != s_InvalidButtonIndex) {
-                [self _buttonClicked:pressedIndex];
+    async.Completed(
+        objcwinrt::callback([self](const WF::IAsyncOperation<Controls::ContentDialogResult>& operation, WF::AsyncStatus status) {
+            if (status == WF::AsyncStatus::Completed) {
+                int pressedIndex = XamlControls::XamlContentDialogPressedIndex(_contentDialog);
+                if (pressedIndex != s_InvalidButtonIndex) {
+                    [self _buttonClicked:pressedIndex];
+                } else {
+                    // Dismissed the dialog via ESC which imitates the cancel button being pressed
+                    [self _buttonClicked:_cancelButtonIndex];
+                }
             } else {
-                // Dismissed the dialog via ESC which imitates the cancel button being pressed
-                [self _buttonClicked:_cancelButtonIndex];
+                TraceVerbose(TAG, L"Failed with error code %u", (unsigned)status);
+                _isContentDialogVisible = NO;
             }
-        } else {
-            TraceVerbose(TAG, L"Failed with error code %u", (unsigned)status);
-            _isContentDialogVisible = NO;
-        }
-    }));
+        }));
 }
 
 /**
